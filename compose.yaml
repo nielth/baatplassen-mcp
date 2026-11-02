@@ -1,0 +1,31 @@
+# MCP server for the Claude connector, reached through the Caddy on the external
+# `public-caddy` network. The crawl runs outside this stack and writes to the same ./data.
+#
+# Needs BAATPLASSEN_MCP_SECRET in .env. The server only answers on /<secret>/mcp:
+#   echo "BAATPLASSEN_MCP_SECRET=$(openssl rand -hex 32)" > .env && chmod 600 .env
+
+services:
+  baatplassen-mcp:
+    build: .
+    container_name: baatplassen-mcp
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      BAATPLASSEN_DB: /data/baatplassen.db
+      BAATPLASSEN_MCP_SECRET: ${BAATPLASSEN_MCP_SECRET:?Set BAATPLASSEN_MCP_SECRET in .env}
+    volumes:
+      # Writable: SQLite needs its WAL files here, and viewed images are cached here.
+      - ./data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - public-caddy
+
+networks:
+  public-caddy:
+    external: true

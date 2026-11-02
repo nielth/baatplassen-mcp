@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "baatplassen": {
+      "command": "uv",
+      "args": ["run", "baatplassen", "serve"]
+    }
+  }
+}
