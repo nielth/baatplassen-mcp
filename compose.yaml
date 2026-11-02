@@ -43,9 +43,7 @@ services:
   baatplassen-crawler:
     <<: *hardening
     container_name: baatplassen-crawler
-    command: [".venv/bin/baatplassen", "run", "--delay", "0.25"]
-    # Python as PID 1 ignores SIGTERM. With an init, `docker stop` ends it straight away.
-    init: true
+    command: ["/baatplassen", "run", "--delay", "0.25"]
     environment:
       BAATPLASSEN_DB: /data/baatplassen.db
     depends_on:

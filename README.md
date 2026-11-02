@@ -26,17 +26,20 @@ so a second one exits straight away.
 
 ## Crawling by hand
 
+SQLite needs the `sqlite_fts5` build tag and a C compiler:
+
 ```sh
-uv run baatplassen discover   # read the sitemaps and queue new or changed topics
-uv run baatplassen crawl      # download queued topics, one request per second
-uv run baatplassen status     # show coverage
+go build -tags sqlite_fts5 -o baatplassen ./cmd/baatplassen
+./baatplassen discover   # read the sitemaps and queue new or changed topics
+./baatplassen crawl      # download queued topics, one request per second
+./baatplassen status     # show coverage
 ```
 
 Progress is saved after every page, so a stopped crawl can simply be started again. To run it in
 the background and keep the Mac awake:
 
 ```sh
-nohup caffeinate -i uv run baatplassen crawl >> data/crawl.log 2>&1 &
+nohup caffeinate -i ./baatplassen crawl >> data/crawl.log 2>&1 &
 tail -f data/crawl.log
 pkill -f "baatplassen crawl"   # stop
 ```
@@ -61,5 +64,5 @@ last known page, so this is quick, but edits to older pages and deleted posts ar
 ## Development
 
 ```sh
-uv run pytest && uv run black . && uv run ruff check . && uv run mypy src tests
+gofmt -l . && go vet -tags sqlite_fts5 ./... && go test -tags sqlite_fts5 ./...
 ```

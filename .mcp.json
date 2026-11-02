@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "baatplassen": {
-      "command": "uv",
-      "args": ["run", "baatplassen", "serve"]
+      "command": "go",
+      "args": ["run", "-tags", "sqlite_fts5", "./cmd/baatplassen", "serve"]
     }
   }
 }
