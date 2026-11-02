@@ -19,6 +19,11 @@ def main() -> None:
     )
     run.add_argument("--max-topics", type=int, help="stop after this many topics")
 
+    forever = commands.add_parser(
+        "run", help="finish the crawl, then look for new posts every 24 hours"
+    )
+    forever.add_argument("--delay", type=float, default=1.0)
+
     commands.add_parser("status", help="show crawl coverage")
 
     find = commands.add_parser("search", help="search from the terminal")
@@ -33,9 +38,14 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "discover":
-        crawl.discover(db.connect(), args.delay)
+        with crawl.acquire_lock():
+            crawl.discover(db.connect(), args.delay)
     elif args.command == "crawl":
-        crawl.crawl(db.connect(), args.delay, args.max_topics)
+        with crawl.acquire_lock():
+            crawl.crawl(db.connect(), args.delay, args.max_topics)
+    elif args.command == "run":
+        with crawl.acquire_lock():
+            crawl.run_forever(db.connect(), args.delay)
     elif args.command == "status":
         status = search.archive_status(db.connect_readonly())
         print(json.dumps(status, indent=2, ensure_ascii=False))

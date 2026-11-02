@@ -12,7 +12,19 @@ Run `claude` in this directory and approve the `baatplassen` MCP server the firs
 
 It works during a crawl too, but only over what has been downloaded so far (newest topics first).
 
-## Crawling
+## Running it on a server
+
+`docker compose up -d --build` starts two containers:
+
+- `baatplassen-mcp` serves the archive to a Claude connector. See the top of `compose.yaml` for
+  the secret it needs in `.env`.
+- `baatplassen-crawler` finishes the download and then looks for new posts every 24 hours. It waits
+  an hour and tries again if the site is down.
+
+Follow the crawler with `docker logs -f baatplassen-crawler`. Only one crawler can run at a time,
+so a second one exits straight away.
+
+## Crawling by hand
 
 ```sh
 uv run baatplassen discover   # read the sitemaps and queue new or changed topics

@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS posts_topic ON posts (topic_id, id);
 CREATE INDEX IF NOT EXISTS posts_author ON posts (author COLLATE NOCASE);
 
+CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5 (
     title,
     body,

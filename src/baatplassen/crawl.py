@@ -1,9 +1,11 @@
 """Polite, resumable crawler: one request at a time, progress committed after each page."""
 
+import fcntl
 import re
 import sqlite3
 import time
 from datetime import UTC, datetime
+from typing import TextIO
 
 import httpx
 
@@ -18,6 +20,8 @@ ROBOTS_EXCLUDED_TOPICS = {179874, 179667}
 
 RETRY_WAITS_SECONDS = [30, 60, 120, 300, 600, 900]
 MAX_CONSECUTIVE_PARSE_ERRORS = 20
+DISCOVER_INTERVAL_SECONDS = 24 * 60 * 60
+RETRY_AFTER_FAILURE_SECONDS = 60 * 60
 GONE_STATUSES = {403, 404, 410}
 RETRY_STATUSES = {408, 425, 429, 500, 502, 503, 504, 520, 522, 524}
 
@@ -184,3 +188,47 @@ def crawl(conn: sqlite3.Connection, delay: float, max_topics: int | None) -> Non
                 f"({rate:.2f}/s), {remaining} topics left"
             )
     log(f"Stopped after {crawled} topics and {fetcher.requests} requests")
+
+
+def acquire_lock() -> TextIO:
+    """Make sure only one crawler runs. The lock lasts as long as the returned file."""
+    db.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock = db.DB_PATH.with_name("crawl.lock").open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise SystemExit("Another crawler is already running.") from None
+    return lock
+
+
+def last_discovery(conn: sqlite3.Connection) -> float | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = 'last_discovery'").fetchone()
+    return float(row[0]) if row else None
+
+
+def run_once(conn: sqlite3.Connection, delay: float, now: float) -> float:
+    """Discover if due, crawl everything queued, and return the seconds until next time."""
+    last = last_discovery(conn)
+    if last is None or now - last >= DISCOVER_INTERVAL_SECONDS:
+        discover(conn, delay)
+        last = now
+        conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('last_discovery', ?)",
+            (str(last),),
+        )
+        conn.commit()
+    crawl(conn, delay, None)
+    return max(0.0, last + DISCOVER_INTERVAL_SECONDS - now)
+
+
+def run_forever(conn: sqlite3.Connection, delay: float) -> None:
+    """Keep the archive complete and up to date, surviving site outages."""
+    while True:
+        try:
+            wait = run_once(conn, delay, time.time())
+            log(f"Up to date. Next check for new posts in {wait / 3600:.1f} hours")
+        except (CrawlAborted, httpx.HTTPError) as error:
+            wait = RETRY_AFTER_FAILURE_SECONDS
+            log(f"Crawl failed: {error!r}. Trying again in {wait / 3600:.1f} hours")
+        time.sleep(wait)
