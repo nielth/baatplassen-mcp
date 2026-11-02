@@ -123,9 +123,8 @@ def find_words(pattern: str, limit: int = 50) -> list[dict[str, Any]]:
 def get_post_images(post_id: int, start: int = 0) -> list[str | Image]:
     """Look at the images in a post, for when a picture matters to the answer.
 
-    Images are downloaded on first use and then cached. Only images uploaded to the forum
-    can be fetched: images in /bildearkiv (mostly from before about 2015, disallowed by
-    robots.txt) and on other sites come back as a link and a reason instead.
+    Images are downloaded on first use and then cached. Only images hosted on the forum
+    can be fetched: images on other sites come back as a link and a reason instead.
 
     Args:
         post_id: From search_posts or get_topic.

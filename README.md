@@ -37,12 +37,13 @@ last known page, so this is quick, but edits to older pages and deleted posts ar
 - Only what a logged-out visitor can see is archived.
 - Images are fetched only when Claude asks to look at one, then cached resized in `data/images.db`.
   Downloading them all up front would be about 100 GB or more and take days of extra requests.
-- Images in `/bildearkiv` (mostly before about 2015, disallowed by robots.txt) and on other sites
-  are not fetched. Claude gets the link instead.
+- Images on other sites are not fetched. Claude gets the link instead. Old images on the forum may
+  also have been removed.
 - Search matches words, not meaning, and has no Norwegian stemming. `motor*` finds `motoren` but
   not `dieselmotor`. Claude compensates by thinking up variants and using `find_words` to see which
   words the forum really uses.
-- The crawler follows robots.txt, including the two topics it excludes by name.
+- The crawler follows robots.txt, including the two topics it excludes by name. The exception is
+  `/bildearkiv` images, which Claude may fetch with permission from the site's owner.
 - Posts belong to their authors. The archive is for personal use, so don't republish it.
 
 ## Development

@@ -34,7 +34,6 @@ def cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection
 @pytest.mark.parametrize(
     "url",
     [
-        "https://baatplassen.no/bildearkiv/43/a.jpg",
         "https://baatplassen.no/i/theme_resources/a.png",
         "https://example.com/i/uploads/a.jpg",
         "http://192.168.1.1/i/uploads/a.jpg",
@@ -49,6 +48,13 @@ def test_only_the_forums_uploads_are_fetched(
     with pytest.raises(images.ImageUnavailable):
         images.get_jpeg(cache, client, url)
     assert calls == []
+
+
+def test_old_image_archive_is_fetched(cache: sqlite3.Connection) -> None:
+    calls: list[str] = []
+    client = client_returning(200, png_bytes((10, 10)), calls)
+    images.get_jpeg(cache, client, "https://baatplassen.no/bildearkiv/43/a.jpg")
+    assert len(calls) == 1
 
 
 def test_image_is_resized_and_cached(cache: sqlite3.Connection) -> None:

@@ -36,10 +36,9 @@ def refusal_reason(url: str) -> str | None:
     parsed = urlparse(url)
     if parsed.hostname not in SITE_HOSTS:
         return "hosted on another site, so it is not fetched automatically"
-    if parsed.path.startswith("/bildearkiv"):
-        return "in /bildearkiv, which baatplassen.no's robots.txt disallows"
-    if not parsed.path.startswith("/i/uploads/"):
-        return "not in the forum's uploads folder"
+    # robots.txt disallows /bildearkiv, but the site's owner has given permission.
+    if not parsed.path.startswith(("/i/uploads/", "/bildearkiv/")):
+        return "not in the forum's image folders"
     return None
 
 
