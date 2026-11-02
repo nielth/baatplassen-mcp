@@ -8,7 +8,10 @@
 # Set BAATPLASSEN_DATA_DIR to keep the data somewhere other than ./data.
 
 x-hardening: &hardening
+  # Built here, never pulled: this image isn't in any registry.
   image: baatplassen:latest
+  build: .
+  pull_policy: build
   restart: unless-stopped
   user: "1000:1000"
   read_only: true
@@ -30,7 +33,6 @@ x-hardening: &hardening
 services:
   baatplassen-mcp:
     <<: *hardening
-    build: .
     container_name: baatplassen-mcp
     environment:
       BAATPLASSEN_DB: /data/baatplassen.db
