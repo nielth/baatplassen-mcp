@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/nielth/baatplassen-mcp/internal/db"
 	"github.com/nielth/baatplassen-mcp/internal/images"
+	"github.com/nielth/baatplassen-mcp/internal/notes"
 	"github.com/nielth/baatplassen-mcp/internal/search"
 )
 
@@ -350,37 +352,68 @@ func New() *mcpserver.MCPServer {
 	return s
 }
 
-// Serve serves over stdio, for Claude Code on the same machine.
+// Serve serves over stdio, for Claude Code on the same machine. Its user is the admin.
 func Serve() error {
-	return mcpserver.ServeStdio(New())
+	return mcpserver.ServeStdio(New(), mcpserver.WithStdioContextFunc(func(ctx context.Context) context.Context {
+		return withOwner(ctx, notes.Admin)
+	}))
 }
 
-// Handler answers only on paths starting with the secret: MCP requests on /<secret>/mcp and
-// the notes page on /<secret>/notes.
-func Handler(secret string) http.Handler {
+// Handler answers only on paths starting with a secret: MCP requests on /<secret>/mcp and
+// the notes page on /<secret>/notes. The admin's secret is adminSecret. Other users get
+// theirs from the admin on the notes page, and the secret decides whose notes are used.
+func Handler(adminSecret string) http.Handler {
 	// Stateless, so restarting the container doesn't break a connected client. Host checks
 	// guard against browsers reaching localhost services. This sits behind Caddy and the
 	// Host header is whatever Caddy forwards.
 	mcpHandler := mcpserver.NewStreamableHTTPServer(New(),
 		mcpserver.WithStateLess(true),
 		mcpserver.WithDisableLocalhostProtection(true),
+		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			if owner, ok := ownerFrom(r.Context()); ok {
+				return withOwner(ctx, owner)
+			}
+			return ctx
+		}),
 	)
 	routes := http.NewServeMux()
 	routes.Handle("/mcp", mcpHandler)
 	routes.HandleFunc("GET /notes", showNotes)
 	routes.HandleFunc("POST /notes", addNote)
 	routes.HandleFunc("GET /notes/images/{id}", noteImage)
-	prefix := "/" + secret
-	withoutSecret := http.StripPrefix(prefix, routes)
+	routes.HandleFunc("POST /users", adminOnly(createUser))
+	routes.HandleFunc("POST /users/revoke", adminOnly(revokeUser))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if len(path) <= len(prefix) || path[len(prefix)] != '/' ||
-			subtle.ConstantTimeCompare([]byte(path[:len(prefix)]), []byte(prefix)) != 1 {
+		secret, _, found := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+		if !found || secret == "" {
 			http.NotFound(w, r)
 			return
 		}
-		withoutSecret.ServeHTTP(w, r)
+		owner, ok, err := userOf(secret, adminSecret)
+		if err != nil {
+			pageError(w, err)
+			return
+		}
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		r = r.WithContext(withOwner(r.Context(), owner))
+		http.StripPrefix("/"+secret, routes).ServeHTTP(w, r)
 	})
+}
+
+// userOf returns whose secret this is, or false if nobody's.
+func userOf(secret, adminSecret string) (int64, bool, error) {
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(adminSecret)) == 1 {
+		return notes.Admin, true, nil
+	}
+	conn, err := notes.Connect()
+	if err != nil {
+		return 0, false, err
+	}
+	defer conn.Close()
+	return notes.UserBySecret(conn, secret)
 }
 
 // ServeHTTP serves over HTTP for a Claude connector. Nothing logs requests: their path

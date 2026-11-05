@@ -3,7 +3,8 @@
 # for new posts every 24 hours. Both use the same data folder.
 #
 # Needs BAATPLASSEN_MCP_SECRET in .env. The server only answers on /<secret>/mcp, and on
-# /<secret>/notes, the page for adding photos to the boat log:
+# /<secret>/notes, the page for adding photos to the boat log. This is the admin's secret, which
+# can give other people their own on the notes page:
 #   echo "BAATPLASSEN_MCP_SECRET=$(openssl rand -hex 32)" > .env && chmod 600 .env
 #
 # Set BAATPLASSEN_DATA_DIR to keep the data somewhere other than ./data.

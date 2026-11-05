@@ -38,6 +38,21 @@ Unlike the archive, the notes can't be downloaded again, so back them up:
 sqlite3 data/notes.db ".backup notes-backup.db"
 ```
 
+## Giving others access
+
+`BAATPLASSEN_MCP_SECRET` is the admin's secret. At the bottom of the admin's notes page, enter a
+name to make a new secret address for someone else. It's shown once, so send it to them straight
+away: one URL to add as a connector in Claude, one for their notes page. Each person has their own
+notes and can't see anyone else's, but the forum archive is shared. Only the admin can give or
+remove access. A removed person's notes are kept.
+
+Only a hash of each secret is stored. If someone loses their address, remove their access and make
+them a new one. To give a removed person access again with their old address:
+
+```sh
+sqlite3 data/notes.db "UPDATE users SET revoked_at = NULL WHERE name = 'Kari'"
+```
+
 ## Running it on a server
 
 `docker compose up -d --build` starts two containers:

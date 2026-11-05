@@ -44,11 +44,17 @@ Svar')`,
 
 func call(t *testing.T, server *httptest.Server, method string, params any) map[string]any {
 	t.Helper()
+	return callAs(t, server, secret, method, params)
+}
+
+// callAs makes an MCP request on another user's secret.
+func callAs(t *testing.T, server *httptest.Server, userSecret, method string, params any) map[string]any {
+	t.Helper()
 	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequest(http.MethodPost, server.URL+"/"+secret+"/mcp", bytes.NewReader(body))
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/"+userSecret+"/mcp", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

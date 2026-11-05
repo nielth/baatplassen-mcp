@@ -1,4 +1,4 @@
-// Package notes is the owner's own log about their boat: dated text with optional photos.
+// Package notes is each user's own log about their boat: dated text with optional photos.
 // It is kept in its own database, apart from the forum archive, because it can't be
 // downloaded again.
 package notes
@@ -16,6 +16,10 @@ import (
 
 const timeFormat = "2006-01-02T15:04:05Z"
 
+// Admin is the owner of the server: the user of BAATPLASSEN_MCP_SECRET and of Claude Code on
+// the server itself. Other users have the ids of their row in the users table.
+const Admin int64 = 0
+
 const schema = `
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY,
@@ -29,6 +33,14 @@ CREATE TABLE IF NOT EXISTS note_images (
     jpeg BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS note_images_note ON note_images (note_id, id);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,  -- Starts at 1: 0 is the admin.
+    name TEXT NOT NULL,
+    secret_hash TEXT NOT NULL UNIQUE,  -- The secret itself is only shown once.
+    created_at TEXT NOT NULL,
+    revoked_at TEXT
+);
 `
 
 // Note is one log entry. Images is how many photos it has.
@@ -44,6 +56,10 @@ func Path() string {
 	return filepath.Join(filepath.Dir(db.Path), "notes.db")
 }
 
+func now() string {
+	return time.Now().UTC().Format(timeFormat)
+}
+
 // Connect opens the notes, creating them if needed.
 func Connect() (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(Path()), 0o755); err != nil {
@@ -53,22 +69,44 @@ func Connect() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := conn.Exec(schema); err != nil {
+	if err := migrate(conn); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	return conn, nil
 }
 
+// migrate creates the tables, and gives notes from before there were users to the admin.
+func migrate(conn *sql.DB) error {
+	if _, err := conn.Exec(schema); err != nil {
+		return err
+	}
+	var hasOwner bool
+	if err := conn.QueryRow(
+		"SELECT COUNT(*) > 0 FROM pragma_table_info('notes') WHERE name = 'owner'",
+	).Scan(&hasOwner); err != nil {
+		return err
+	}
+	if !hasOwner {
+		if _, err := conn.Exec("ALTER TABLE notes ADD COLUMN owner INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+	_, err := conn.Exec("CREATE INDEX IF NOT EXISTS notes_owner ON notes (owner, id)")
+	return err
+}
+
 // Add saves a note with its photos, already converted to JPEG.
-func Add(conn *sql.DB, text string, jpegs [][]byte) (Note, error) {
-	note := Note{CreatedAt: time.Now().UTC().Format(timeFormat), Text: text, Images: len(jpegs)}
+func Add(conn *sql.DB, owner int64, text string, jpegs [][]byte) (Note, error) {
+	note := Note{CreatedAt: now(), Text: text, Images: len(jpegs)}
 	tx, err := conn.Begin()
 	if err != nil {
 		return note, err
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec("INSERT INTO notes (created_at, text) VALUES (?, ?)", note.CreatedAt, text)
+	result, err := tx.Exec(
+		"INSERT INTO notes (owner, created_at, text) VALUES (?, ?, ?)", owner, note.CreatedAt, text,
+	)
 	if err != nil {
 		return note, err
 	}
@@ -83,22 +121,22 @@ func Add(conn *sql.DB, text string, jpegs [][]byte) (Note, error) {
 	return note, tx.Commit()
 }
 
-// Search returns the notes containing every word of the query, newest first. An empty query
-// returns all notes. There are few enough notes to simply check each one.
-func Search(conn *sql.DB, query string, limit int) ([]Note, error) {
+const selectNotes = `
+SELECT id, created_at, text, (SELECT COUNT(*) FROM note_images WHERE note_id = notes.id)
+FROM notes
+WHERE owner = ? AND deleted_at IS NULL
+`
+
+// Search returns the owner's notes containing every word of the query, newest first. An
+// empty query returns all of them. There are few enough notes to simply check each one.
+func Search(conn *sql.DB, owner int64, query string, limit int) ([]Note, error) {
 	words := []string{}
 	for _, word := range strings.Fields(strings.ToLower(query)) {
 		if word = strings.Trim(word, `"*`); word != "" {
 			words = append(words, word)
 		}
 	}
-	rows, err := conn.Query(`
-        SELECT id, created_at, text,
-               (SELECT COUNT(*) FROM note_images WHERE note_id = notes.id)
-        FROM notes
-        WHERE deleted_at IS NULL
-        ORDER BY id DESC
-        `)
+	rows, err := conn.Query(selectNotes+"ORDER BY id DESC", owner)
 	if err != nil {
 		return nil, err
 	}
@@ -125,33 +163,23 @@ func containsAll(text string, words []string) bool {
 	return true
 }
 
-// Get returns a note, or nil if there is none with that id.
-func Get(conn *sql.DB, id int64) (*Note, error) {
-	notes, err := conn.Query(`
-        SELECT id, created_at, text,
-               (SELECT COUNT(*) FROM note_images WHERE note_id = notes.id)
-        FROM notes
-        WHERE id = ? AND deleted_at IS NULL
-        `, id)
-	if err != nil {
-		return nil, err
-	}
-	defer notes.Close()
-	if !notes.Next() {
-		return nil, notes.Err()
-	}
+// Get returns one of the owner's notes, or nil if they have none with that id.
+func Get(conn *sql.DB, owner int64, id int64) (*Note, error) {
 	var note Note
-	if err := notes.Scan(&note.ID, &note.CreatedAt, &note.Text, &note.Images); err != nil {
+	err := conn.QueryRow(selectNotes+"AND id = ?", owner, id).Scan(&note.ID, &note.CreatedAt, &note.Text, &note.Images)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &note, nil
 }
 
-// Delete hides a note. It reports false if there was no such note.
-func Delete(conn *sql.DB, id int64) (bool, error) {
+// Delete hides one of the owner's notes. It reports false if they had no such note.
+func Delete(conn *sql.DB, owner int64, id int64) (bool, error) {
 	result, err := conn.Exec(
-		"UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
-		time.Now().UTC().Format(timeFormat), id,
+		"UPDATE notes SET deleted_at = ? WHERE id = ? AND owner = ? AND deleted_at IS NULL", now(), id, owner,
 	)
 	if err != nil {
 		return false, err
@@ -160,7 +188,8 @@ func Delete(conn *sql.DB, id int64) (bool, error) {
 	return changed > 0, err
 }
 
-// ImageIDs returns the ids of a note's photos, in the order they were added.
+// ImageIDs returns the ids of a note's photos, in the order they were added. Check that the
+// note is the user's with Get first.
 func ImageIDs(conn *sql.DB, noteID int64) ([]int64, error) {
 	rows, err := conn.Query("SELECT id FROM note_images WHERE note_id = ? ORDER BY id", noteID)
 	if err != nil {
@@ -178,14 +207,14 @@ func ImageIDs(conn *sql.DB, noteID int64) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-// Image returns a photo as JPEG, or nil if there is none with that id or its note is deleted.
-func Image(conn *sql.DB, id int64) ([]byte, error) {
+// Image returns one of the owner's photos as JPEG, or nil if they have none with that id.
+func Image(conn *sql.DB, owner int64, id int64) ([]byte, error) {
 	var jpeg []byte
 	err := conn.QueryRow(`
         SELECT jpeg FROM note_images
         JOIN notes ON notes.id = note_images.note_id
-        WHERE note_images.id = ? AND notes.deleted_at IS NULL
-        `, id).Scan(&jpeg)
+        WHERE note_images.id = ? AND notes.owner = ? AND notes.deleted_at IS NULL
+        `, id, owner).Scan(&jpeg)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

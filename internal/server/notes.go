@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata" // The container has no time zone files, and the page shows Norwegian time.
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -60,21 +61,39 @@ const getNoteImagesDescription = "Look at the photos the user added to a note.\n
 	"    note_id: From search_notes.\n" +
 	"    start: Photos to skip. Each call returns up to 4."
 
-// withNotes opens the notes for one tool call, and turns errors into tool errors.
-func withNotes(name string, run func(conn *sql.DB) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
+type ownerKey struct{}
+
+// withOwner records whose notes a request may use: the user of the secret it came in on.
+func withOwner(ctx context.Context, owner int64) context.Context {
+	return context.WithValue(ctx, ownerKey{}, owner)
+}
+
+// ownerFrom returns whose notes a request may use, or false if nobody's. Requests always
+// get an owner from the secret or from stdio, so false would be a bug, and fails closed.
+func ownerFrom(ctx context.Context) (int64, bool) {
+	owner, ok := ctx.Value(ownerKey{}).(int64)
+	return owner, ok
+}
+
+// withNotes opens the user's notes for one tool call, and turns errors into tool errors.
+func withNotes(ctx context.Context, name string, run func(conn *sql.DB, owner int64) (*mcp.CallToolResult, error)) (*mcp.CallToolResult, error) {
+	owner, ok := ownerFrom(ctx)
+	if !ok {
+		return toolError(name, errors.New("request has no user")), nil
+	}
 	conn, err := notes.Connect()
 	if err != nil {
 		return toolError(name, err), nil
 	}
 	defer conn.Close()
-	result, err := run(conn)
+	result, err := run(conn, owner)
 	if err != nil {
 		return toolError(name, err), nil
 	}
 	return result, nil
 }
 
-func saveNote(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func saveNote(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	text, err := request.RequireString("text")
 	if err == nil && strings.TrimSpace(text) == "" {
 		err = errors.New("text is empty")
@@ -82,8 +101,8 @@ func saveNote(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResu
 	if err != nil {
 		return invalidArguments("save_note", err), nil
 	}
-	return withNotes("save_note", func(conn *sql.DB) (*mcp.CallToolResult, error) {
-		note, err := notes.Add(conn, strings.TrimSpace(text), nil)
+	return withNotes(ctx, "save_note", func(conn *sql.DB, owner int64) (*mcp.CallToolResult, error) {
+		note, err := notes.Add(conn, owner, strings.TrimSpace(text), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -91,10 +110,10 @@ func saveNote(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResu
 	})
 }
 
-func searchNotes(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func searchNotes(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	limit := min(max(request.GetInt("limit", 50), 1), 200)
-	return withNotes("search_notes", func(conn *sql.DB) (*mcp.CallToolResult, error) {
-		found, err := notes.Search(conn, request.GetString("query", ""), limit)
+	return withNotes(ctx, "search_notes", func(conn *sql.DB, owner int64) (*mcp.CallToolResult, error) {
+		found, err := notes.Search(conn, owner, request.GetString("query", ""), limit)
 		if err != nil {
 			return nil, err
 		}
@@ -102,13 +121,13 @@ func searchNotes(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolR
 	})
 }
 
-func deleteNote(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func deleteNote(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	noteID, err := request.RequireInt("note_id")
 	if err != nil {
 		return invalidArguments("delete_note", err), nil
 	}
-	return withNotes("delete_note", func(conn *sql.DB) (*mcp.CallToolResult, error) {
-		deleted, err := notes.Delete(conn, int64(noteID))
+	return withNotes(ctx, "delete_note", func(conn *sql.DB, owner int64) (*mcp.CallToolResult, error) {
+		deleted, err := notes.Delete(conn, owner, int64(noteID))
 		if err != nil {
 			return nil, err
 		}
@@ -119,14 +138,14 @@ func deleteNote(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolRe
 	})
 }
 
-func getNoteImages(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getNoteImages(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	noteID, err := request.RequireInt("note_id")
 	if err != nil {
 		return invalidArguments("get_note_images", err), nil
 	}
 	start := max(request.GetInt("start", 0), 0)
-	return withNotes("get_note_images", func(conn *sql.DB) (*mcp.CallToolResult, error) {
-		note, err := notes.Get(conn, int64(noteID))
+	return withNotes(ctx, "get_note_images", func(conn *sql.DB, owner int64) (*mcp.CallToolResult, error) {
+		note, err := notes.Get(conn, owner, int64(noteID))
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +160,7 @@ func getNoteImages(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 		summary := fmt.Sprintf("Note %d has %d photo(s), showing %d.", note.ID, len(imageIDs), len(selected))
 		content := []mcp.Content{mcp.NewTextContent(summary)}
 		for _, imageID := range selected {
-			jpeg, err := notes.Image(conn, imageID)
+			jpeg, err := notes.Image(conn, owner, imageID)
 			if err != nil {
 				return nil, err
 			}
@@ -151,8 +170,9 @@ func getNoteImages(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	})
 }
 
-// The notes page, for adding photos from a phone. It is reached through the secret path,
-// so it needs no login and can't be the target of cross-site requests.
+// The notes page, for adding photos from a phone. It is reached through the user's secret
+// path, so it needs no login and can't be the target of cross-site requests. For the admin
+// it also lists who else has access, and gives out new secrets.
 
 var oslo = mustLoadLocation("Europe/Oslo")
 
@@ -177,10 +197,20 @@ type pageNote struct {
 	ImageIDs []int64
 }
 
+// newUser is shown once, right after the admin has created it: the secret isn't stored.
+type newUser struct {
+	Name     string
+	MCPURL   string
+	NotesURL string
+}
+
 type pageData struct {
-	Error string
-	Text  string
-	Notes []pageNote
+	Error   string
+	Text    string
+	Notes   []pageNote
+	IsAdmin bool
+	Users   []notes.User
+	NewUser *newUser
 }
 
 var notesPage = template.Must(template.New("notes").Funcs(template.FuncMap{"localTime": localTime}).Parse(`<!doctype html>
@@ -203,6 +233,13 @@ var notesPage = template.Must(template.New("notes").Funcs(template.FuncMap{"loca
   time { color: var(--muted); font-size: 0.9rem; }
   p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   img { display: block; max-width: 100%; height: auto; margin-top: 8px; border-radius: 4px; }
+  h2 { font-size: 1.1rem; margin: 28px 0 8px; }
+  input[type=text] { font: inherit; padding: 8px; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 6px; min-width: 0; }
+  .new { padding: 12px; margin-bottom: 12px; border: 1px solid var(--accent); border-radius: 6px; }
+  .new input { width: 100%; box-sizing: border-box; margin: 2px 0 8px; font-size: 0.85rem; }
+  .user { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .user form { padding: 0; border: 0; }
+  .user button { padding: 6px 10px; background: transparent; color: var(--error); border: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -222,6 +259,27 @@ var notesPage = template.Must(template.New("notes").Funcs(template.FuncMap{"loca
 {{else}}
 <p>Ingen notater ennå. Skriv her, eller be Claude om å notere noe.</p>
 {{end}}
+{{if .IsAdmin}}
+<h2>Tilgang for andre</h2>
+{{with .NewUser}}
+<div class="new">
+  <p><strong>{{.Name}}</strong> har fått tilgang. Send dem disse adressene nå: de vises bare denne ene gangen.</p>
+  <label>Legg til som connector i Claude:<input type="text" readonly value="{{.MCPURL}}"></label>
+  <label>Notatside for bilder:<input type="text" readonly value="{{.NotesURL}}"></label>
+</div>
+{{end}}
+<form method="post" action="users">
+  <input type="text" name="name" placeholder="Navn, f.eks. Kari" maxlength="60" required>
+  <button type="submit">Lag ny adresse</button>
+</form>
+{{range .Users}}
+<div class="user">
+  <span>{{.Name}} <time>· fra {{localTime .CreatedAt}}</time></span>
+  <form method="post" action="users/revoke"><input type="hidden" name="id" value="{{.ID}}"><button type="submit">Fjern tilgang</button></form>
+</div>
+{{end}}
+<p><time>Andre har egne notater, og ser verken dine eller hverandres. Forumarkivet er felles.</time></p>
+{{end}}
 </body>
 </html>
 `))
@@ -233,14 +291,25 @@ func setPageHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 }
 
-func renderNotes(w http.ResponseWriter, status int, data pageData) {
+func renderNotes(w http.ResponseWriter, r *http.Request, status int, data pageData) {
+	owner, ok := ownerFrom(r.Context())
+	if !ok {
+		pageError(w, errors.New("request has no user"))
+		return
+	}
 	conn, err := notes.Connect()
 	if err != nil {
 		pageError(w, err)
 		return
 	}
 	defer conn.Close()
-	found, err := notes.Search(conn, "", notesOnPage)
+	if data.IsAdmin = owner == notes.Admin; data.IsAdmin {
+		if data.Users, err = notes.Users(conn); err != nil {
+			pageError(w, err)
+			return
+		}
+	}
+	found, err := notes.Search(conn, owner, "", notesOnPage)
 	if err != nil {
 		pageError(w, err)
 		return
@@ -268,8 +337,8 @@ func pageError(w http.ResponseWriter, err error) {
 	http.Error(w, "Noe gikk galt", http.StatusInternalServerError)
 }
 
-func showNotes(w http.ResponseWriter, _ *http.Request) {
-	renderNotes(w, http.StatusOK, pageData{})
+func showNotes(w http.ResponseWriter, r *http.Request) {
+	renderNotes(w, r, http.StatusOK, pageData{})
 }
 
 func readPhoto(header *multipart.FileHeader) ([]byte, error) {
@@ -291,14 +360,19 @@ func readPhoto(header *multipart.FileHeader) ([]byte, error) {
 func addNote(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		renderNotes(w, http.StatusBadRequest, pageData{Error: "Kunne ikke lese skjemaet. Er bildene for store?"})
+		renderNotes(w, r, http.StatusBadRequest, pageData{Error: "Kunne ikke lese skjemaet. Er bildene for store?"})
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
+	owner, ok := ownerFrom(r.Context())
+	if !ok {
+		pageError(w, errors.New("request has no user"))
+		return
+	}
 	text := strings.TrimSpace(r.FormValue("text"))
 	photos := r.MultipartForm.File["photos"]
 	failed := func(message string) {
-		renderNotes(w, http.StatusBadRequest, pageData{Error: message, Text: text})
+		renderNotes(w, r, http.StatusBadRequest, pageData{Error: message, Text: text})
 	}
 	if text == "" && len(photos) == 0 {
 		failed("Skriv noe eller legg til et bilde.")
@@ -331,7 +405,7 @@ func addNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	if _, err := notes.Add(conn, text, jpegs); err != nil {
+	if _, err := notes.Add(conn, owner, text, jpegs); err != nil {
 		pageError(w, err)
 		return
 	}
@@ -343,7 +417,8 @@ func addNote(w http.ResponseWriter, r *http.Request) {
 
 func noteImage(w http.ResponseWriter, r *http.Request) {
 	imageID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	owner, ok := ownerFrom(r.Context())
+	if err != nil || !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -353,7 +428,7 @@ func noteImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
-	jpeg, err := notes.Image(conn, imageID)
+	jpeg, err := notes.Image(conn, owner, imageID)
 	if err != nil {
 		pageError(w, err)
 		return
@@ -366,4 +441,69 @@ func noteImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Write(jpeg)
+}
+
+// adminOnly answers as if the page didn't exist for anyone but the admin.
+func adminOnly(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if owner, ok := ownerFrom(r.Context()); !ok || owner != notes.Admin {
+			http.NotFound(w, r)
+			return
+		}
+		handler(w, r)
+	}
+}
+
+// baseURL is the address the browser used, as Caddy passes it on.
+func baseURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func createUser(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if name == "" || utf8.RuneCountInString(name) > 60 {
+		renderNotes(w, r, http.StatusBadRequest, pageData{Error: "Navnet må være mellom 1 og 60 tegn."})
+		return
+	}
+	conn, err := notes.Connect()
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	defer conn.Close()
+	user, secret, err := notes.CreateUser(conn, name)
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	base := baseURL(r) + "/" + secret
+	renderNotes(w, r, http.StatusOK, pageData{NewUser: &newUser{
+		Name:     user.Name,
+		MCPURL:   base + "/mcp",
+		NotesURL: base + "/notes",
+	}})
+}
+
+func revokeUser(w http.ResponseWriter, r *http.Request) {
+	userID, err := strconv.ParseInt(r.PostFormValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "Ugyldig bruker", http.StatusBadRequest)
+		return
+	}
+	conn, err := notes.Connect()
+	if err != nil {
+		pageError(w, err)
+		return
+	}
+	defer conn.Close()
+	if err := notes.RevokeUser(conn, userID); err != nil {
+		pageError(w, err)
+		return
+	}
+	w.Header().Set("Location", "../notes")
+	w.WriteHeader(http.StatusSeeOther)
 }
