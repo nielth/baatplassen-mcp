@@ -94,7 +94,10 @@ func texts(result map[string]any) []string {
 
 func TestOnlyTheSecretPathAnswers(t *testing.T) {
 	server := testServer(t)
-	for _, path := range []string{"/", "/mcp", "/" + secret, "/wrong/mcp", "/" + secret + "/mcp/"} {
+	for _, path := range []string{
+		"/", "/mcp", "/" + secret, "/wrong/mcp", "/" + secret + "/mcp/", "/" + secret + "x/mcp",
+		"/notes", "/wrong/notes", "/" + secret[:len(secret)-1] + "/notes",
+	} {
 		response, err := http.Post(server.URL+path, "application/json", strings.NewReader("{}"))
 		if err != nil {
 			t.Fatal(err)
@@ -106,18 +109,22 @@ func TestOnlyTheSecretPathAnswers(t *testing.T) {
 	}
 }
 
-func TestListsTheFiveTools(t *testing.T) {
+func TestListsTheTools(t *testing.T) {
 	result := call(t, testServer(t), "tools/list", map[string]any{})
 	tools := result["tools"].([]any)
 	names := map[string]bool{}
 	for _, item := range tools {
 		tool := item.(map[string]any)
 		names[tool["name"].(string)] = true
-		if hints, ok := tool["annotations"].(map[string]any); ok && hints["destructiveHint"] == true {
-			t.Errorf("%s is labelled destructive", tool["name"])
+		hints, _ := tool["annotations"].(map[string]any)
+		if destructive := hints["destructiveHint"] == true; destructive != (tool["name"] == "delete_note") {
+			t.Errorf("%s: destructive = %v", tool["name"], destructive)
 		}
 	}
-	for _, name := range []string{"search_posts", "get_topic", "archive_status", "find_words", "get_post_images"} {
+	for _, name := range []string{
+		"search_posts", "get_topic", "archive_status", "find_words", "get_post_images",
+		"save_note", "search_notes", "delete_note", "get_note_images",
+	} {
 		if !names[name] {
 			t.Errorf("missing %s", name)
 		}

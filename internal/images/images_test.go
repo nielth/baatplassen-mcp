@@ -127,7 +127,7 @@ func TestImageIsResizedAndCached(t *testing.T) {
 }
 
 func TestSmallImageIsNotEnlarged(t *testing.T) {
-	converted, err := toJPEG(pngBytes(t, 100, 50))
+	converted, err := ToJPEG(pngBytes(t, 100, 50))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestDecompressionBombIsRefused(t *testing.T) {
 	if err := png.Encode(&output, picture); err != nil {
 		t.Fatal(err)
 	}
-	_, err := toJPEG(output.Bytes())
+	_, err := ToJPEG(output.Bytes())
 	if err == nil || !strings.Contains(err.Error(), "unreasonably large") {
 		t.Errorf("err = %v", err)
 	}
@@ -186,7 +186,7 @@ func TestDecompressionBombIsRefused(t *testing.T) {
 
 func decodedJPEG(t *testing.T, data []byte) image.Image {
 	t.Helper()
-	converted, err := toJPEG(data)
+	converted, err := ToJPEG(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestOtherFormatsAreRefused(t *testing.T) {
 	// Registered by the imaging library, but not something forum posts should bring in.
 	tiffHeader := []byte("II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00")
 	var unavailable *UnavailableError
-	if _, err := toJPEG(tiffHeader); !errors.As(err, &unavailable) {
+	if _, err := ToJPEG(tiffHeader); !errors.As(err, &unavailable) {
 		t.Errorf("err = %v", err)
 	}
 }

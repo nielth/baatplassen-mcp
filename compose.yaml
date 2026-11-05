@@ -2,7 +2,8 @@
 # external `public-caddy` network. baatplassen-crawler finishes the download and then looks
 # for new posts every 24 hours. Both use the same data folder.
 #
-# Needs BAATPLASSEN_MCP_SECRET in .env. The server only answers on /<secret>/mcp:
+# Needs BAATPLASSEN_MCP_SECRET in .env. The server only answers on /<secret>/mcp, and on
+# /<secret>/notes, the page for adding photos to the boat log:
 #   echo "BAATPLASSEN_MCP_SECRET=$(openssl rand -hex 32)" > .env && chmod 600 .env
 #
 # Set BAATPLASSEN_DATA_DIR to keep the data somewhere other than ./data.
@@ -22,7 +23,8 @@ x-hardening: &hardening
   security_opt:
     - no-new-privileges:true
   volumes:
-    # Writable: SQLite needs its WAL files here, and viewed images are cached here.
+    # Writable: SQLite needs its WAL files here, viewed images are cached here and the boat
+    # log is kept here.
     - ${BAATPLASSEN_DATA_DIR:-./data}:/data
   logging:
     driver: json-file

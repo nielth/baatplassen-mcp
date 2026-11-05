@@ -121,8 +121,9 @@ func dropAlpha(decoded image.Image) image.Image {
 	return output
 }
 
-// toJPEG converts an image to a JPEG small enough to send to Claude.
-func toJPEG(data []byte) ([]byte, error) {
+// ToJPEG converts an image to a JPEG small enough to send to Claude, turned the way its
+// camera says. Problems with the image itself are an UnavailableError.
+func ToJPEG(data []byte) ([]byte, error) {
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, &UnavailableError{Reason: fmt.Sprintf("could not be read as an image: %v", err)}
@@ -225,7 +226,7 @@ func GetJPEG(cache *sql.DB, client *http.Client, imageURL string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	jpeg, err := toJPEG(data)
+	jpeg, err := ToJPEG(data)
 	if err != nil {
 		return nil, err
 	}

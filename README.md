@@ -12,12 +12,38 @@ Run `claude` in this directory and approve the `baatplassen` MCP server the firs
 
 It works during a crawl too, but only over what has been downloaded so far (newest topics first).
 
+## Your own boat log
+
+Tell Claude to note something and it saves it, dated, in `data/notes.db`:
+
+> Noter at jeg byttet impeller i dag, Johnson 09-1027B. Motoren er Yanmar 3GM30F.
+
+When you later ask about your own boat, Claude checks the log first and then searches the forum
+for your actual engine and parts. Notes are your own and kept apart from the forum archive.
+
+Claude can't pass photos from the chat to the server, so photos go through the notes page on the
+server, `https://<your domain>/<secret>/notes`. It also lists everything in the log. Add it to
+the phone's home screen. Photos are stored at most 1568 pixels on their longest side, which is
+what Claude reads anyway, so keep the originals if you want full resolution.
+
+Deleted notes are only hidden. To bring one back:
+
+```sh
+sqlite3 data/notes.db "UPDATE notes SET deleted_at = NULL WHERE id = 12"
+```
+
+Unlike the archive, the notes can't be downloaded again, so back them up:
+
+```sh
+sqlite3 data/notes.db ".backup notes-backup.db"
+```
+
 ## Running it on a server
 
 `docker compose up -d --build` starts two containers:
 
-- `baatplassen-mcp` serves the archive to a Claude connector. See the top of `compose.yaml` for
-  the secret it needs in `.env`.
+- `baatplassen-mcp` serves the archive and the notes page to a Claude connector. See the top of
+  `compose.yaml` for the secret it needs in `.env`.
 - `baatplassen-crawler` finishes the download and then looks for new posts every 24 hours. It waits
   an hour and tries again if the site is down.
 
